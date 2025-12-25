@@ -1,0 +1,6 @@
+{
+  "name": "@bit-auto/shared",
+  "version": "0.0.0",
+  "main": "src/index.js",
+  "types": "src/index.d.ts"
+}

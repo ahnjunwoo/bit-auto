@@ -1,0 +1,205 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type PricePayload = {
+  symbol: "BTC";
+  currency: "USD";
+  price: number;
+  source: string;
+  cached: boolean;
+  stale: boolean;
+  fetchedAt: number;
+};
+
+type Theme = "light" | "dark";
+
+function formatUSD(n: number) {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return String(n);
+  }
+}
+
+function formatKST(ts: number) {
+  const ms = ts < 10_000_000_000 ? ts * 1000 : ts;
+  const d = new Date(ms);
+  return d.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
+}
+
+export default function Page() {
+  const [theme, setTheme] = useState<Theme>("light");
+
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "";
+  const [data, setData] = useState<PricePayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const prettyPrice = useMemo(() => (data ? formatUSD(data.price) : ""), [data]);
+
+  // ✅ DOM에 이미 적용된 테마를 읽어서 state만 동기화
+  useEffect(() => {
+    const t = (document.documentElement.getAttribute("data-theme") as Theme) || "light";
+    setTheme(t);
+  }, []);
+
+  function toggleTheme() {
+    const next: Theme = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    document.documentElement.setAttribute("data-theme", next);
+    window.localStorage.setItem("theme", next);
+  }
+
+  useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      try {
+        const res = await fetch(`${apiBase}/api/btc`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as PricePayload;
+        if (alive) {
+          setData(json);
+          setError(null);
+        }
+      } catch (err) {
+        if (alive) setError(err instanceof Error ? err.message : "알 수 없는 오류");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    }
+
+    load();
+    const id = setInterval(load, 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  return (
+    <main className="screen pastel">
+      <div className="petals" aria-hidden />
+      <div className="sparkles" aria-hidden />
+
+      <section className="card card--pastel">
+        <span className="stickerTape2" aria-hidden />
+
+        <header className="header">
+          <div className="pill">
+            <span className="pill__dot" aria-hidden />
+            <span className="pill__text">실시간</span>
+          </div>
+
+          <div className="title">
+            <div className="title__main">비트코인 시세</div>
+            <div className="title__sub">파스텔 · 사쿠라 스타일</div>
+          </div>
+
+          <div className="headerRight">
+            <div className="pill pill--right">
+              <span className="pill__k">갱신</span>
+              <span className="pill__v">5초</span>
+            </div>
+
+            <button className="themeToggle" onClick={toggleTheme} type="button">
+              <span className="themeToggle__icon" aria-hidden>
+                {theme === "dark" ? "🌙" : "☀️"}
+              </span>
+              <span className="themeToggle__text">
+                {theme === "dark" ? "다크" : "라이트"}
+              </span>
+            </button>
+          </div>
+        </header>
+
+        <div className="divider" />
+
+        <div className="content">
+          <div className="priceBox">
+            <div className="priceBox__label">현재가 (BTC / USD)</div>
+
+            {loading ? (
+              <div className="skeleton">
+                <div className="skeleton__bar" />
+                <div className="skeleton__bar small" />
+              </div>
+            ) : error ? (
+              <div className="notice notice--error">
+                <div className="notice__title">오류</div>
+                <div className="notice__msg">{error}</div>
+              </div>
+            ) : data ? (
+              <>
+                <div className="price">{prettyPrice}</div>
+
+                <div className="chips">
+                  <span className={`chip ${data.cached ? "chip--ok" : ""}`}>
+                    <span className="chip__k">캐시</span>
+                    <span className="chip__v">{String(data.cached)}</span>
+                  </span>
+                  <span className={`chip ${data.stale ? "chip--warn" : ""}`}>
+                    <span className="chip__k">지연</span>
+                    <span className="chip__v">{String(data.stale)}</span>
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="notice notice--error">
+                <div className="notice__title">데이터 없음</div>
+                <div className="notice__msg">응답 값이 비어 있어요.</div>
+              </div>
+            )}
+          </div>
+
+          <aside className="side">
+            <div className="panel">
+              <div className="panel__title">상태</div>
+              <div className="panel__body">
+                <div className="row">
+                  <span className="k">소스</span>
+                  <span className="v">{data?.source ?? "-"}</span>
+                </div>
+                <div className="row">
+                  <span className="k">업데이트</span>
+                  <span className="v">{data ? formatKST(data.fetchedAt) : "-"}</span>
+                </div>
+                <div className="row">
+                  <span className="k">표시</span>
+                  <span className="v">현물 · 스윙</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="panel panel--soft">
+              <div className="panel__title">메모</div>
+              <div className="panel__body">
+                <div className="quote">
+                  <span className="quote__icon" aria-hidden>
+                    🌸
+                  </span>
+                  <span className="quote__text">“확신 매수보다, 분할 매수로 천천히.”</span>
+                </div>
+
+                <div className="miniBar">
+                  <span className="miniBar__tag">MVP</span>
+                  <span className="miniBar__text">최소 기능으로 빠르게 확인 중</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <footer className="footer">
+          <span className="footer__left">버전 0.1</span>
+          <span className="footer__right">© 나의 포트폴리오</span>
+        </footer>
+      </section>
+    </main>
+  );
+}
