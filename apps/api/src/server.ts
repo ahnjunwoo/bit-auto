@@ -7,13 +7,13 @@ app.register(cors, { origin: true });
 
 const CACHE_TTL_MS = 5000;
 const PRICE_ENDPOINT =
-  "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd";
+  "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT";
 
 type PricePayload = {
   symbol: "BTC";
-  currency: "USD";
+  currency: "USDT";
   price: number;
-  source: "coingecko";
+  source: "binance";
   cached: boolean;
   stale: boolean;
   fetchedAt: number;
@@ -52,19 +52,19 @@ async function fetchBtcPrice(): Promise<PricePayload> {
       throw new Error(`Upstream error ${res.status}: ${body}`);
     }
 
-    const json: { bitcoin?: { usd?: number } } = await res.json();
-    const price = json.bitcoin?.usd;
+    const json: { price?: string } = await res.json();
+    const price = json.price ? Number(json.price) : NaN;
 
-    if (typeof price !== "number") {
+    if (!Number.isFinite(price)) {
       throw new Error("Unexpected upstream payload");
     }
 
     const fetchedAt = Date.now();
     const value = {
       symbol: "BTC" as const,
-      currency: "USD" as const,
+      currency: "USDT" as const,
       price,
-      source: "coingecko" as const,
+      source: "binance" as const,
       fetchedAt,
     };
 
