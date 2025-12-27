@@ -12,6 +12,15 @@ type PricePayload = {
   fetchedAt: number;
 };
 
+type RiskPayload = {
+  symbol: "BTCUSDT";
+  fundingRate: number;
+  openInterest: number;
+  risk: { level: "OK" | "WARN" | "DANGER"; reasons: string[] };
+  source: "binance" | "cache" | "stale-cache";
+  ts: number;
+};
+
 type Theme = "light" | "dark";
 
 function formatUSD(n: number) {
@@ -20,6 +29,21 @@ function formatUSD(n: number) {
       style: "currency",
       currency: "USD",
       maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return String(n);
+  }
+}
+
+function formatPercent(n: number) {
+  if (!Number.isFinite(n)) return String(n);
+  return `${(n * 100).toFixed(3)}%`;
+}
+
+function formatNumber(n: number) {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      maximumFractionDigits: 0,
     }).format(n);
   } catch {
     return String(n);
@@ -35,12 +59,21 @@ function formatKST(ts: number) {
 export default function Page() {
   const [theme, setTheme] = useState<Theme>("light");
 
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "";
   const [data, setData] = useState<PricePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [riskData, setRiskData] = useState<RiskPayload | null>(null);
+  const [riskError, setRiskError] = useState<string | null>(null);
 
   const prettyPrice = useMemo(() => (data ? formatUSD(data.price) : ""), [data]);
+  const prettyFunding = useMemo(
+    () => (riskData ? formatPercent(riskData.fundingRate) : ""),
+    [riskData],
+  );
+  const prettyOi = useMemo(
+    () => (riskData ? formatNumber(riskData.openInterest) : ""),
+    [riskData],
+  );
 
   // ✅ DOM에 이미 적용된 테마를 읽어서 state만 동기화
   useEffect(() => {
@@ -60,15 +93,26 @@ export default function Page() {
 
     async function load() {
       try {
-        const res = await fetch(`${apiBase}/api/btc`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as PricePayload;
+        const [priceRes, riskRes] = await Promise.all([
+          fetch("/api/btc", { cache: "no-store" }),
+          fetch("/api/market/btc-risk", { cache: "no-store" }),
+        ]);
+        if (!priceRes.ok) throw new Error(`가격 API HTTP ${priceRes.status}`);
+        if (!riskRes.ok) throw new Error(`리스크 API HTTP ${riskRes.status}`);
+        const json = (await priceRes.json()) as PricePayload;
+        const riskJson = (await riskRes.json()) as RiskPayload;
         if (alive) {
           setData(json);
+          setRiskData(riskJson);
           setError(null);
+          setRiskError(null);
         }
       } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : "알 수 없는 오류");
+        if (alive) {
+          const message = err instanceof Error ? err.message : "알 수 없는 오류";
+          setError(message);
+          setRiskError(message);
+        }
       } finally {
         if (alive) setLoading(false);
       }
@@ -173,6 +217,61 @@ export default function Page() {
                   <span className="k">표시</span>
                   <span className="v">현물 · 스윙</span>
                 </div>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel__title">리스크 대시보드</div>
+              <div className="panel__body">
+                {loading ? (
+                  <div className="row">
+                    <span className="k">상태</span>
+                    <span className="v">로딩 중</span>
+                  </div>
+                ) : riskError ? (
+                  <div className="row">
+                    <span className="k">오류</span>
+                    <span className="v">{riskError}</span>
+                  </div>
+                ) : riskData ? (
+                  <>
+                    <div className="row">
+                      <span className="k">펀딩</span>
+                      <span className="v">{prettyFunding}</span>
+                    </div>
+                    <div className="row">
+                      <span className="k">오픈인터레스트</span>
+                      <span className="v">{prettyOi}</span>
+                    </div>
+                    <div className="chips">
+                      <span
+                        className={`chip ${
+                          riskData.risk.level === "OK" ? "chip--ok" : "chip--warn"
+                        }`}
+                      >
+                        <span className="chip__k">레벨</span>
+                        <span className="chip__v">{riskData.risk.level}</span>
+                      </span>
+                      <span className="chip">
+                        <span className="chip__k">소스</span>
+                        <span className="chip__v">{riskData.source}</span>
+                      </span>
+                    </div>
+                    <div className="row">
+                      <span className="k">사유</span>
+                      <span className="v">
+                        {riskData.risk.reasons.length
+                          ? riskData.risk.reasons.join(", ")
+                          : "없음"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="row">
+                    <span className="k">데이터</span>
+                    <span className="v">없음</span>
+                  </div>
+                )}
               </div>
             </div>
 
