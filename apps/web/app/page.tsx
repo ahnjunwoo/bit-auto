@@ -59,6 +59,7 @@ function formatKST(ts: number) {
 export default function Page() {
   const [theme, setTheme] = useState<Theme>("light");
 
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "";
   const [data, setData] = useState<PricePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,8 +95,8 @@ export default function Page() {
     async function load() {
       try {
         const [priceRes, riskRes] = await Promise.all([
-          fetch("/api/btc", { cache: "no-store" }),
-          fetch("/api/market/btc-risk", { cache: "no-store" }),
+          fetch(`${apiBase}/api/btc`, { cache: "no-store" }),
+          fetch(`${apiBase}/api/market/btc-risk`, { cache: "no-store" }),
         ]);
         if (!priceRes.ok) throw new Error(`가격 API HTTP ${priceRes.status}`);
         if (!riskRes.ok) throw new Error(`리스크 API HTTP ${riskRes.status}`);
