@@ -12,6 +12,13 @@ const FUNDING_ENDPOINT =
   "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT";
 const OPEN_INTEREST_ENDPOINT =
   "https://fapi.binance.com/fapi/v1/openInterest?symbol=BTCUSDT";
+const UPBIT_ENDPOINT = "https://api.upbit.com/v1/ticker?markets=KRW-BTC";
+const COINBASE_ENDPOINT = "https://api.coinbase.com/v2/prices/spot?currency=USD";
+const FX_ENDPOINTS = [
+  "https://api.exchangerate.host/latest?base=USD&symbols=KRW",
+  "https://open.er-api.com/v6/latest/USD",
+  "https://api.exchangerate-api.com/v4/latest/USD",
+];
 
 type PricePayload = {
   symbol: "BTC";
@@ -59,6 +66,28 @@ const riskCache: RiskCacheState = {
   expiresAt: 0,
 };
 
+type PremiumPayload = {
+  symbol: "BTC";
+  kimchiPremium: number;
+  coinbasePremium: number;
+  source: "binance+upbit+coinbase";
+  ts: number;
+  cached: boolean;
+  stale: boolean;
+};
+
+type PremiumCacheState = {
+  value: Omit<PremiumPayload, "cached" | "stale" | "ts"> | null;
+  fetchedAt: number;
+  expiresAt: number;
+};
+
+const premiumCache: PremiumCacheState = {
+  value: null,
+  fetchedAt: 0,
+  expiresAt: 0,
+};
+
 function parseNumber(value: unknown, label: string) {
   const n = typeof value === "string" ? Number.parseFloat(value) : Number(value);
   if (!Number.isFinite(n)) {
@@ -85,6 +114,34 @@ function computeRisk(fundingRate: number, openInterest: number, prev?: number) {
   return { level, reasons };
 }
 
+async function fetchJson(url: string) {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Upstream error ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
+async function fetchFxRate(): Promise<number> {
+  let lastError: unknown = null;
+
+  for (const url of FX_ENDPOINTS) {
+    try {
+      const json = await fetchJson(url);
+      const rate = parseNumber(
+        (json?.rates?.KRW ?? json?.rates?.krw) as unknown,
+        "fx rate",
+      );
+      return rate;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("FX rate unavailable");
+}
+
 async function fetchBtcPrice(): Promise<PricePayload> {
   const now = Date.now();
   if (cache.value && now < cache.expiresAt) {
@@ -97,16 +154,7 @@ async function fetchBtcPrice(): Promise<PricePayload> {
   }
 
   try {
-    const res = await fetch(PRICE_ENDPOINT, {
-      headers: { Accept: "application/json" },
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Upstream error ${res.status}: ${body}`);
-    }
-
-    const json: { price?: string } = await res.json();
+    const json: { price?: string } = await fetchJson(PRICE_ENDPOINT);
     const price = json.price ? Number(json.price) : NaN;
 
     if (!Number.isFinite(price)) {
@@ -161,22 +209,10 @@ app.get("/api/market/btc-risk", async (_request, reply) => {
   }
 
   try {
-    const [fundingRes, oiRes] = await Promise.all([
-      fetch(FUNDING_ENDPOINT, { headers: { Accept: "application/json" } }),
-      fetch(OPEN_INTEREST_ENDPOINT, { headers: { Accept: "application/json" } }),
+    const [fundingJson, oiJson] = await Promise.all([
+      fetchJson(FUNDING_ENDPOINT),
+      fetchJson(OPEN_INTEREST_ENDPOINT),
     ]);
-
-    if (!fundingRes.ok) {
-      const body = await fundingRes.text();
-      throw new Error(`Upstream error ${fundingRes.status}: ${body}`);
-    }
-    if (!oiRes.ok) {
-      const body = await oiRes.text();
-      throw new Error(`Upstream error ${oiRes.status}: ${body}`);
-    }
-
-    const fundingJson: { lastFundingRate?: string } = await fundingRes.json();
-    const oiJson: { openInterest?: string } = await oiRes.json();
 
     const fundingRate = parseNumber(fundingJson.lastFundingRate, "fundingRate");
     const openInterest = parseNumber(oiJson.openInterest, "openInterest");
@@ -206,6 +242,60 @@ app.get("/api/market/btc-risk", async (_request, reply) => {
       };
     }
     app.log.error(error, "failed to fetch btc risk");
+    reply.code(502);
+    return { error: "upstream_unavailable" };
+  }
+});
+
+app.get("/api/market/premium", async (_request, reply) => {
+  const now = Date.now();
+  if (premiumCache.value && now < premiumCache.expiresAt) {
+    return {
+      ...premiumCache.value,
+      cached: true,
+      stale: false,
+      ts: premiumCache.fetchedAt,
+    };
+  }
+
+  try {
+    const [upbitJson, binanceJson, coinbaseJson, usdKrw] = await Promise.all([
+      fetchJson(UPBIT_ENDPOINT),
+      fetchJson(PRICE_ENDPOINT),
+      fetchJson(COINBASE_ENDPOINT),
+      fetchFxRate(),
+    ]);
+
+    const upbitKrw = parseNumber(upbitJson?.[0]?.trade_price, "upbit price");
+    const binanceUsd = parseNumber(binanceJson.price, "binance price");
+    const coinbaseUsd = parseNumber(coinbaseJson.data?.amount, "coinbase price");
+
+    const kimchiPremium = upbitKrw / (binanceUsd * usdKrw) - 1;
+    const coinbasePremium = coinbaseUsd / binanceUsd - 1;
+
+    const fetchedAt = Date.now();
+    const value: Omit<PremiumPayload, "cached" | "stale" | "ts"> = {
+      symbol: "BTC",
+      kimchiPremium,
+      coinbasePremium,
+      source: "binance+upbit+coinbase",
+    };
+
+    premiumCache.value = value;
+    premiumCache.fetchedAt = fetchedAt;
+    premiumCache.expiresAt = fetchedAt + CACHE_TTL_MS;
+
+    return { ...value, cached: false, stale: false, ts: fetchedAt };
+  } catch (error) {
+    if (premiumCache.value) {
+      return {
+        ...premiumCache.value,
+        cached: true,
+        stale: true,
+        ts: premiumCache.fetchedAt,
+      };
+    }
+    app.log.error(error, "failed to fetch premium data");
     reply.code(502);
     return { error: "upstream_unavailable" };
   }

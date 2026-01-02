@@ -21,6 +21,16 @@ type RiskPayload = {
   ts: number;
 };
 
+type PremiumPayload = {
+  symbol: "BTC";
+  kimchiPremium: number;
+  coinbasePremium: number;
+  source: string;
+  cached: boolean;
+  stale: boolean;
+  ts: number;
+};
+
 type Theme = "light" | "dark";
 type TabKey = "overview" | "risk" | "notes";
 type CategoryKey = "overview" | "market" | "futures" | "signals" | "liquidations";
@@ -69,6 +79,8 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [riskData, setRiskData] = useState<RiskPayload | null>(null);
   const [riskError, setRiskError] = useState<string | null>(null);
+  const [premiumData, setPremiumData] = useState<PremiumPayload | null>(null);
+  const [premiumError, setPremiumError] = useState<string | null>(null);
 
   const prettyPrice = useMemo(() => (data ? formatUSD(data.price) : ""), [data]);
   const prettyFunding = useMemo(
@@ -78,6 +90,14 @@ export default function Page() {
   const prettyOi = useMemo(
     () => (riskData ? formatNumber(riskData.openInterest) : ""),
     [riskData],
+  );
+  const prettyKimchi = useMemo(
+    () => (premiumData ? formatPercent(premiumData.kimchiPremium) : ""),
+    [premiumData],
+  );
+  const prettyCoinbase = useMemo(
+    () => (premiumData ? formatPercent(premiumData.coinbasePremium) : ""),
+    [premiumData],
   );
 
   // ✅ DOM에 이미 적용된 테마를 읽어서 state만 동기화
@@ -98,25 +118,31 @@ export default function Page() {
 
     async function load() {
       try {
-        const [priceRes, riskRes] = await Promise.all([
+        const [priceRes, riskRes, premiumRes] = await Promise.all([
           fetch(`${apiBase}/api/btc`, { cache: "no-store" }),
           fetch(`${apiBase}/api/market/btc-risk`, { cache: "no-store" }),
+          fetch(`${apiBase}/api/market/premium`, { cache: "no-store" }),
         ]);
         if (!priceRes.ok) throw new Error(`가격 API HTTP ${priceRes.status}`);
         if (!riskRes.ok) throw new Error(`리스크 API HTTP ${riskRes.status}`);
+        if (!premiumRes.ok) throw new Error(`프리미엄 API HTTP ${premiumRes.status}`);
         const json = (await priceRes.json()) as PricePayload;
         const riskJson = (await riskRes.json()) as RiskPayload;
+        const premiumJson = (await premiumRes.json()) as PremiumPayload;
         if (alive) {
           setData(json);
           setRiskData(riskJson);
+          setPremiumData(premiumJson);
           setError(null);
           setRiskError(null);
+          setPremiumError(null);
         }
       } catch (err) {
         if (alive) {
           const message = err instanceof Error ? err.message : "알 수 없는 오류";
           setError(message);
           setRiskError(message);
+          setPremiumError(message);
         }
       } finally {
         if (alive) setLoading(false);
@@ -303,6 +329,49 @@ export default function Page() {
                     <span className="k">표시</span>
                     <span className="v">현물 · 스윙</span>
                   </div>
+                </div>
+              </section>
+
+              <section className="panel">
+                <div className="panel__title">프리미엄</div>
+                <div className="panel__body">
+                  {loading ? (
+                    <div className="row">
+                      <span className="k">상태</span>
+                      <span className="v">로딩 중</span>
+                    </div>
+                  ) : premiumError ? (
+                    <div className="row">
+                      <span className="k">오류</span>
+                      <span className="v">{premiumError}</span>
+                    </div>
+                  ) : premiumData ? (
+                    <>
+                      <div className="row">
+                        <span className="k">김치 프리미엄</span>
+                        <span className="v">{prettyKimchi}</span>
+                      </div>
+                      <div className="row">
+                        <span className="k">코인베이스 프리미엄</span>
+                        <span className="v">{prettyCoinbase}</span>
+                      </div>
+                      <div className="chips">
+                        <span className={`chip ${premiumData.cached ? "chip--ok" : ""}`}>
+                          <span className="chip__k">캐시</span>
+                          <span className="chip__v">{String(premiumData.cached)}</span>
+                        </span>
+                        <span className={`chip ${premiumData.stale ? "chip--warn" : ""}`}>
+                          <span className="chip__k">지연</span>
+                          <span className="chip__v">{String(premiumData.stale)}</span>
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="row">
+                      <span className="k">데이터</span>
+                      <span className="v">없음</span>
+                    </div>
+                  )}
                 </div>
               </section>
 
